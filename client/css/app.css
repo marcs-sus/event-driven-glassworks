@@ -27,10 +27,13 @@ body {
   min-height: 100%;
   background:
     radial-gradient(circle at 20% 0%, #2a1d14 0, transparent 42%),
-    radial-gradient(circle at 90% 100%, #1b2a30 0, transparent 40%),
-    var(--bg);
+    radial-gradient(circle at 90% 100%, #1b2a30 0, transparent 40%), var(--bg);
   color: var(--text);
-  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  font-family:
+    "Segoe UI",
+    system-ui,
+    -apple-system,
+    sans-serif;
 }
 
 button {
@@ -41,7 +44,10 @@ button {
   border-radius: 10px;
   padding: 0.65rem 1rem;
   background: linear-gradient(180deg, #34271d, #241a13);
-  transition: border-color 120ms ease, transform 120ms ease, background 120ms ease;
+  transition:
+    border-color 120ms ease,
+    transform 120ms ease,
+    background 120ms ease;
 }
 
 button:hover {
@@ -206,7 +212,11 @@ button.ghost:hover {
 .panel {
   border: 1px solid var(--line);
   border-radius: 16px;
-  background: linear-gradient(180deg, rgba(36, 28, 22, 0.96), rgba(24, 19, 15, 0.96));
+  background: linear-gradient(
+    180deg,
+    rgba(36, 28, 22, 0.96),
+    rgba(24, 19, 15, 0.96)
+  );
   box-shadow: 0 14px 40px rgba(0, 0, 0, 0.28);
 }
 
@@ -337,7 +347,11 @@ button.ghost:hover {
   padding: 2rem;
   text-align: center;
   background:
-    radial-gradient(circle at 50% 0%, rgba(232, 184, 106, 0.16), transparent 55%),
+    radial-gradient(
+      circle at 50% 0%,
+      rgba(232, 184, 106, 0.16),
+      transparent 55%
+    ),
     linear-gradient(180deg, #2a1f17, #17120e);
   box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
 }
@@ -385,4 +399,15 @@ button.ghost:hover {
   .topbar {
     flex-wrap: wrap;
   }
+}
+
+.footer {
+  padding: 16px 24px;
+  text-align: center;
+  color: var(--muted, #9a8b7d);
+  font-size: 0.85rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+.footer a {
+  color: inherit;
 }

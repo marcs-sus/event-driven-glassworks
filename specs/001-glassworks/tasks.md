@@ -39,7 +39,7 @@ client `client/`, tests `tests/`, authoritative docs `docs/` and
 
 - [ ] T001 Update `docs/spec.md` with P1.1-P1.5: add `glassworks.start_requested`, `glassworks.close_requested`, `state.synced`, rejection reasons `invalid role`, `unknown furnace`, `unknown bench`, `malformed payload`, `season already open`, correct season numbering (internal 0, first start 1), and the scenario coverage from `research.md`
 - [ ] T002 Copy `docs/spec.md` to `specs/001-glassworks/spec.md` and verify both files are byte-identical
-- [ ] T003 Create the scaffold: `glassworks/__init__.py`, `tests/__init__.py`, `tests/unit/__init__.py`, `tests/integration/__init__.py`, `tests/support/__init__.py`, `client/css/`, and `client/js/`
+- [ ] T003 Create the scaffold: (no package; server.py is a single file at the repo root), `tests/__init__.py`, `tests/unit/__init__.py`, `tests/integration/__init__.py`, `tests/support/__init__.py`, `client/css/`, and `client/js/`
 - [ ] T004 Create `client/index.html` with CDN script tags for Vue 3, Phaser 3, and the Socket.IO client, plus Vue and Phaser mount elements
 - [ ] T005 Create `client/css/app.css` with the two-column layout: game canvas, login overlay, HUD, and controls
 
@@ -71,7 +71,7 @@ bootstrap, and client shell. No story work starts until this phase is complete.
 ### Transport, server, and client shell
 
 - [ ] T016 Implement `glassworks/transport.py` bootstrap: `socketio.AsyncServer`, auth role parsing, `state.synced` unicast, broadcast helper, an `asyncio.Lock` for serialized mutation/emission, and a 50 ms tick task that calls `engine.advance`; depends on T015
-- [ ] T017 [P] Implement `glassworks/static.py` with a stdlib ASGI wrapper that delegates `/socket.io` paths and safely serves files under `client/` with a MIME map and `index.html` fallback
+- [ ] T017 [P] Implement the static-file section of server.py with a stdlib ASGI wrapper that delegates `/socket.io` paths and safely serves files under `client/` with a MIME map and `index.html` fallback
 - [ ] T018 Implement `server.py` composing `static.py` and `socketio.ASGIApp`, exposing `app` for `uvicorn server:app`; depends on T016 and T017
 - [ ] T019 Implement `tests/support/transport.py` with an in-process `uvicorn.Server` bound to a port-0 loopback socket via `Config.bind_socket` plus an async `socketio.AsyncClient` fixture
 - [ ] T020 Write `tests/integration/test_transport_boot.py` proving a client connects with each role, receives `state.synced` with the schema fields, and the server starts/stops without leaked tasks; depends on T018 and T019

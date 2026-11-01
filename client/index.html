@@ -40,7 +40,10 @@
             <div class="stat">
               <span class="label">Season</span>
               <span class="value">{{ seasonLabel }}</span>
-              <span class="sub">{{ snapshot ? (snapshot.season_open ? 'open' : 'closed') : '—' }}</span>
+              <span class="sub"
+                >{{ snapshot ? (snapshot.season_open ? 'open' : 'closed') : '—'
+                }}</span
+              >
             </div>
             <div class="stat">
               <span class="label">Sand</span>
@@ -55,12 +58,16 @@
             <div class="stat">
               <span class="label">Glassblowers</span>
               <span class="value">{{ workerLabel }}</span>
-              <span class="sub">total {{ snapshot ? snapshot.glassblowers.total : '—' }}</span>
+              <span class="sub"
+                >total {{ snapshot ? snapshot.glassblowers.total : '—' }}</span
+              >
             </div>
             <div class="stat">
               <span class="label">Role</span>
               <span class="value">{{ roleLabel }}</span>
-              <span class="sub">{{ store.connected ? 'active session' : 'offline' }}</span>
+              <span class="sub"
+                >{{ store.connected ? 'active session' : 'offline' }}</span
+              >
             </div>
           </div>
         </section>
@@ -126,4 +133,12 @@
     <script src="/js/scene.js"></script>
     <script src="/js/main.js"></script>
   </body>
+  <footer class="footer">
+    <span
+      >Developed by <strong>Marcos Vinicius Cunha</strong> —
+      <a href="https://github.com/marcs-sus">@marcs-sus</a></span
+    >
+    <span>·</span>
+    <span>Glassworks · 2026/2 · LPP</span>
+  </footer>
 </html>
