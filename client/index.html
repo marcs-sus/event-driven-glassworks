@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Glassworks — Village of the Glassmakers</title>
+    <link rel="stylesheet" href="/css/app.css" />
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.90.0/dist/phaser.min.js"></script>
+    <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
+  </head>
+  <body>
+    <div id="app" v-cloak>
+      <header class="topbar">
+        <div class="brand">
+          <h1>Glassworks</h1>
+          <span>village of the glassmakers</span>
+        </div>
+        <div class="topbar-actions">
+          <span class="status-dot" :class="{ online: store.connected }"></span>
+          <span>{{ connectionLabel }}</span>
+          <button
+            v-if="store.connected"
+            class="ghost"
+            type="button"
+            @click="leave"
+          >
+            Leave
+          </button>
+        </div>
+      </header>
+
+      <main class="layout">
+        <section class="game-column">
+          <div class="canvas-shell">
+            <div id="game-canvas"></div>
+          </div>
+
+          <div class="hud">
+            <div class="stat">
+              <span class="label">Season</span>
+              <span class="value">{{ seasonLabel }}</span>
+              <span class="sub">{{ snapshot ? (snapshot.season_open ? 'open' : 'closed') : '—' }}</span>
+            </div>
+            <div class="stat">
+              <span class="label">Sand</span>
+              <span class="value">{{ sandLabel }}</span>
+              <span class="sub">cap 30</span>
+            </div>
+            <div class="stat">
+              <span class="label">Glass</span>
+              <span class="value">{{ glassLabel }}</span>
+              <span class="sub">stock</span>
+            </div>
+            <div class="stat">
+              <span class="label">Glassblowers</span>
+              <span class="value">{{ workerLabel }}</span>
+              <span class="sub">total {{ snapshot ? snapshot.glassblowers.total : '—' }}</span>
+            </div>
+            <div class="stat">
+              <span class="label">Role</span>
+              <span class="value">{{ roleLabel }}</span>
+              <span class="sub">{{ store.connected ? 'active session' : 'offline' }}</span>
+            </div>
+          </div>
+        </section>
+
+        <aside class="side-column">
+          <section class="panel event-panel">
+            <div class="panel-head">
+              <h2>Event panel</h2>
+              <button class="ghost" type="button" @click="clearEvents">
+                Clear
+              </button>
+            </div>
+            <div class="event-list">
+              <div
+                v-for="event in store.events"
+                :key="event.id"
+                class="event-row"
+                :class="'event-' + event.direction"
+              >
+                <div class="event-line">
+                  <span class="event-dir">
+                    {{ event.direction === 'up' ? '⬆ emit' : '⬇ on' }}
+                  </span>
+                  <span class="event-time">{{ event.timestamp }}</span>
+                  <span class="event-name">{{ event.name }}</span>
+                  <span class="event-cause">cause: {{ event.cause }}</span>
+                </div>
+                <div class="event-line event-detail">
+                  <span class="event-payload">{{ event.payload }}</span>
+                  <span class="event-reaction">→ {{ event.reaction }}</span>
+                </div>
+              </div>
+              <p v-if="!store.events.length" class="muted">
+                No events yet. Choose a role to see the handshake.
+              </p>
+            </div>
+          </section>
+        </aside>
+      </main>
+
+      <div v-if="!store.connected" class="login-overlay">
+        <div class="login-card">
+          <h1>Glassworks</h1>
+          <p class="muted">
+            Choose your role to enter the village. The server is the single
+            source of truth.
+          </p>
+          <div class="role-buttons">
+            <button class="primary" type="button" @click="join('master')">
+              Join as Master
+            </button>
+            <button type="button" @click="join('player')">
+              Join as Player
+            </button>
+          </div>
+          <p v-if="store.lastError" class="error">{{ store.lastError }}</p>
+        </div>
+      </div>
+    </div>
+
+    <script src="/js/store.js"></script>
+    <script src="/js/socket.js"></script>
+    <script src="/js/scene.js"></script>
+    <script src="/js/main.js"></script>
+  </body>
+</html>
