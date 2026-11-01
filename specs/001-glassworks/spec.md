@@ -18,7 +18,7 @@ closes seasons; players produce glass through furnaces and benches.
 
 | Field                | Initial | Reset on new season | Notes                                                       |
 | :------------------- | :------ | :------------------ | :---------------------------------------------------------- |
-| `season`             | 1       | no (increments)     | +1 on each `glassworks.started`; never resets               |
+| `season`             | 0       | no (increments)     | +1 on each `glassworks.started`; first started yields 1     |
 | `sand`               | 12      | yes (12)            | cap 30                                                      |
 | `glass`              | 0       | yes (0)             | currency and score                                          |
 | `glassblowers_total` | 8       | no                  | fixed                                                       |
@@ -35,16 +35,19 @@ closes seasons; players produce glass through furnaces and benches.
 5. `stored` — take succeeded, `glass +1`.
 6. `cracked` — take failed, piece removed, `glass` unchanged.
 
-Crack chance during take: `max(0, 1 − elapsed_cooling / 8) * 100%`.
+Crack chance during take: `max(0, 1 - elapsed_cooling / 8) * 100%`.
 
 ## Events
 
 | Event                         | Emits  | Receives  | Payload                                 | What happens                                      |
 | :---------------------------- | :----- | :-------- | :-------------------------------------- | :------------------------------------------------ |
+| `state.synced`                | Server | Requester | state, causa                            | Sent to one client on join; causa `connection`    |
+| `glassworks.start_requested`  | Master | Server    | —                                       | Master asks to open a season                      |
 | `glassworks.started`          | Server | Everyone  | state, causa                            | season+1, sand=12, glass=0, pieces cleared        |
+| `glassworks.close_requested`  | Master | Server    | —                                       | Master asks to close the season                   |
 | `glassworks.closed`           | Server | Everyone  | state, causa                            | in-progress pieces removed, workers freed         |
 | `glassmaking.requested`       | Player | Server    | furnace_id                              | request to start a new piece                      |
-| `glassmaking.started`         | Server | Everyone  | state, causa, furnace_id                | sand−3, worker+1, furnace timer 5 s               |
+| `glassmaking.started`         | Server | Everyone  | state, causa, furnace_id                | sand-3, worker+1, furnace timer 5 s               |
 | `glassmaking.heated`          | Server | Everyone  | state, causa, furnace_id                | furnace timer done, piece ready                   |
 | `glassmaking.bench_requested` | Player | Server    | furnace_id                              | request to move ready piece to a free bench       |
 | `glassmaking.bench_started`   | Server | Everyone  | state, causa, furnace_id, bench_id      | piece moved, bench timer 3 s                      |
@@ -52,12 +55,12 @@ Crack chance during take: `max(0, 1 − elapsed_cooling / 8) * 100%`.
 | `glass.take_requested`        | Player | Server    | bench_id                                | request to take a cooling piece                   |
 | `glass.stored`                | Server | Everyone  | state, causa, bench_id                  | take succeeded, glass+1                           |
 | `glass.cracked`               | Server | Everyone  | state, causa, bench_id, crack_chance    | take failed, piece removed                        |
-| `sand.stored`                 | Server | Everyone  | state, causa, gained                    | sand +min(6, 30−sand) every 10 s; gained=0 at cap |
+| `sand.stored`                 | Server | Everyone  | state, causa, gained                    | sand +min(6, 30-sand) every 10 s; gained=0 at cap |
 | `operation.rejected`          | Server | Requester | causa, reason                           | validation failed                                 |
 | `furnace.purchase_requested`  | Player | Server    | —                                       | request to buy a furnace                          |
-| `furnace.purchased`           | Server | Everyone  | state, causa, furnace_id, cost          | glass−cost, new furnace added                     |
+| `furnace.purchased`           | Server | Everyone  | state, causa, furnace_id, cost          | glass-cost, new furnace added                     |
 | `bench.purchase_requested`    | Player | Server    | —                                       | request to buy a bench                            |
-| `bench.purchased`             | Server | Everyone  | state, causa, bench_id, cost            | glass−cost, new bench added                       |
+| `bench.purchased`             | Server | Everyone  | state, causa, bench_id, cost            | glass-cost, new bench added                       |
 
 ## Purchase cost
 
@@ -68,6 +71,7 @@ Examples (season 1, furnaces): 2nd = 3, 3rd = 5, 4th = 7.
 ## Rejection reasons
 
 - `season not open`
+- `season already open`
 - `not enough sand`
 - `not enough glass`
 - `no free worker`
@@ -78,15 +82,20 @@ Examples (season 1, furnaces): 2nd = 3, 3rd = 5, 4th = 7.
 - `max benches reached`
 - `only master can open season`
 - `only master can close season`
-- `a master already exists`
 - `only players can interact`
+- `a master already exists`
+- `invalid role`
+- `unknown furnace`
+- `unknown bench`
+- `malformed payload`
 - `no piece to take`
 
 ## Rules
 
 1. Game starts with 1 furnace, 1 bench, 12 sand, 0 glass, 8 glassblowers.
-2. Season number starts at 1 and increments on each `glassworks.started`.
-3. Sand increases by `min(6, 30 − sand)` every 10 s while the season is open.
+2. Season number starts at 0 and increments on each `glassworks.started`,
+   so the first `glassworks.started` yields season 1.
+3. Sand increases by `min(6, 30 - sand)` every 10 s while the season is open.
 4. A piece requires 3 sand, 1 free worker and a free furnace.
 5. Furnace timer 5 s; bench timer 3 s; cooling 8 s.
 6. A worker is busy from `glassmaking.started` until `glassmaking.completed`.
@@ -144,3 +153,17 @@ second request is rejected with `not enough glass`.
 Season open. Master disconnects. Server emits `glassworks.closed`
 (causa `master_disconnected`) for everyone; in-progress pieces are
 removed; a new user can log in as Master and start a new season.
+
+### T8 — Rejections: invalid role and duplicate master
+
+A client connects with `role=admin`. Server emits `operation.rejected`
+(reason `invalid role`) then disconnects. A second client connects with
+`role=master` while a Master exists; server emits
+`operation.rejected` (reason `a master already exists`) then disconnects.
+
+### T9 — Rejections: unknown ids and malformed payload
+
+Season open. Player A emits `glassmaking.requested` with
+`furnace_id=99` → `operation.rejected` (reason `unknown furnace`).
+Player A emits `glassmaking.requested` without `furnace_id` →
+`operation.rejected` (reason `malformed payload`).

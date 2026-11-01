@@ -33,7 +33,8 @@ npm, bundler, or build step.
 
 **Testing**: Python standard library `unittest` with
 `unittest.IsolatedAsyncioTestCase`; `socketio.AsyncClient` for the transport
-integration suite. No additional test dependency.
+integration suite. No additional test dependency. Automated tests are optional
+given the schedule.
 
 **Target Platform**: Linux ASGI server; modern desktop and mobile browsers with
 WebSocket support.
@@ -55,16 +56,16 @@ resets the game.
 
 ## Constitution Check
 
-*GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
+_GATE: Must pass before Phase 0 research. Re-check after Phase 1 design._
 
-| Principle | Gate | Status | Evidence |
-|-----------|------|--------|----------|
-| I. Server-Authoritative Event Flow | Client only requests; server validates, mutates, broadcasts | PASS | `transport.py` delegates to a synchronous `engine.py`; clients never receive write authority |
-| II. Single Source of Game Rules | No duplicated rule literals | PASS | All constants and formulas live in `rules.py`; handlers and UI import them only for display |
-| III. Event Contract Discipline | Documented events, naming, payload validation, per-event scenario | PASS WITH PREREQUISITE | `events.py` is the single name registry; contract in `contracts/events.md`; spec reconciliation (P1) adds two request events and scenarios before code |
-| IV. Test-First, Time-Controlled Verification | Failing tests first; deterministic time and randomness | PASS | `ManualClock` and seeded RNG; T1-T7 plus one scenario per event; no real sleeps |
-| V. Minimal In-Memory Architecture | Single process, closed stack, domain isolated from transport | PASS | No new runtime dependency; stdlib static-file ASGI wrapper; domain never imports `socketio` |
-| Governance: staged commits | One commit per implementation stage | PASS | Stage plan below defines seven independently reviewable stages, one per tasks phase |
+| Principle                                    | Gate                                                              | Status                 | Evidence                                                                                                                                               |
+| -------------------------------------------- | ----------------------------------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| I. Server-Authoritative Event Flow           | Client only requests; server validates, mutates, broadcasts       | PASS                   | `transport.py` delegates to a synchronous `engine.py`; clients never receive write authority                                                           |
+| II. Single Source of Game Rules              | No duplicated rule literals                                       | PASS                   | All constants and formulas live in `rules.py`; handlers and UI import them only for display                                                            |
+| III. Event Contract Discipline               | Documented events, naming, payload validation, per-event scenario | PASS WITH PREREQUISITE | `events.py` is the single name registry; contract in `contracts/events.md`; spec reconciliation (P1) adds two request events and scenarios before code |
+| IV. Test-First, Time-Controlled Verification | Failing tests first; deterministic time and randomness            | PASS                   | `ManualClock` and seeded RNG; T1-T7 plus one scenario per event; no real sleeps                                                                        |
+| V. Minimal In-Memory Architecture            | Single process, closed stack, domain isolated from transport      | PASS                   | No new runtime dependency; stdlib static-file ASGI wrapper; domain never imports `socketio`                                                            |
+| Governance: staged commits                   | One commit per implementation stage                               | PASS                   | Stage plan below defines seven independently reviewable stages, one per tasks phase                                                                    |
 
 No constitutional violations require justification.
 
@@ -92,18 +93,17 @@ specs/001-glassworks/
 ### Source Code (repository root)
 
 ```text
-glassworks/
-├── __init__.py
-├── clock.py              # Clock protocol, SystemClock, ManualClock
-├── events.py             # event names, causa values, rejection reasons
-├── rules.py              # every game constant and formula
-├── models.py             # dataclasses and enums: GameState, Piece, Furnace, Bench
-├── engine.py             # synchronous, transport-free state machine
-├── transport.py          # Socket.IO handlers, auth, broadcast, tick loop
-├── static.py             # stdlib ASGI static-file wrapper
-└── server.py             # ASGI app factory and `uvicorn` entry point
+server.py                 # the whole server, one file, in clearly commented sections:
+                          #   1. clock      Clock protocol, SystemClock, ManualClock
+                          #   2. events     event names, causa values, rejection reasons
+                          #   3. rules      every game constant and formula
+                          #   4. models     dataclasses and enums: GameState, Piece, Furnace, Bench
+                          #   5. engine     synchronous, transport-free state machine
+                          #   6. transport  Socket.IO handlers, auth, broadcast, tick loop
+                          #   7. static     stdlib ASGI static-file wrapper (serves client/ at /assets)
+                          #   8. entry      ASGI app factory; run with `uvicorn server:app`
 
-web/
+client/
 ├── index.html
 ├── css/app.css
 └── js/
@@ -141,11 +141,17 @@ requirements.txt
 ```
 
 **Structure Decision**: A single project rooted at the repository. The server is
-an importable `glassworks` package with no packaging step; the client is plain
-static files in `web/` served by the same ASGI process through a small stdlib
+a single `server.py` at the repository root, organized into clearly commented
+sections (clock, events, rules, models, engine, transport, static, entry) with no
+`glassworks/` package and no packaging step; the client is plain static files in
+`client/`, served at `/assets` by the same ASGI process through a small stdlib
 wrapper. This avoids `src/` layout indirection, a second process, a bundler, and
 any framework beyond the constitution's closed stack. Tests mirror the domain
-and transport split.
+and transport sections.
+
+**Required Deliverables**: The event panel, the Phaser canvas, and `/assets`
+static serving are required deliverables for the professor's rubric; they are
+not optional even if the schedule forces cuts elsewhere.
 
 ## Implementation Stages
 
@@ -153,7 +159,7 @@ Each stage is exactly one commit, in order, and matches one tasks phase. A stage
 is reviewable on its own and includes its own tests.
 
 1. **Specification reconciliation and scaffold** (`docs:`): P1 spec updates,
-   mirrored copies, package and web directories, CDN page shell.
+   mirrored copies, `server.py` scaffold and `client/` directory, CDN page shell.
 2. **Foundational domain and transport** (`feat:`): clock, rules, events,
    models, engine skeleton, auth and `state.synced`, static server, test
    harness, Vue/Phaser shell.
