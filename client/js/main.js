@@ -69,20 +69,25 @@
           }
         }
         this.store.lastError = null;
-        this.store.notice =
-          typeof reaction === "function"
-            ? reaction(payload || {})
-            : reaction;
+        const noticeValue = typeof reaction === "function"
+          ? reaction(payload || {})
+          : reaction;
+        this.store.notice = noticeValue;
+        setTimeout(() => {
+          if (this.store.notice === noticeValue) {
+            this.store.notice = null;
+          }
+        }, 3000);
       };
 
       socket.listen(
         "state.synced",
-        applyFact(() => "State synchronized.")
+        applyFact(() => "stores the state and renders the village")
       );
       socket.listen(
         "glassworks.started",
         applyFact(
-          (payload) => "Season " + payload.state.season + " is open."
+          (payload) => "opens season " + payload.state.season + " on the HUD"
         )
       );
       socket.listen(
@@ -90,81 +95,69 @@
         applyFact(
           (payload) =>
             payload.causa === "master_disconnected"
-              ? "Season closed: the Master disconnected."
-              : "Season closed with " + payload.state.glass + " glass stored."
+              ? "marks the season closed after the Master left"
+              : "marks the season closed and keeps " + payload.state.glass + " glass"
         )
       );
       socket.listen(
         "glassmaking.started",
         applyFact(
-          (payload) => "Furnace " + payload.furnace_id + " is heating."
+          (payload) => "highlights furnace " + payload.furnace_id + " as heating"
         )
       );
       socket.listen(
         "glassmaking.heated",
         applyFact(
-          (payload) => "Furnace " + payload.furnace_id + " piece is ready."
+          (payload) => "marks furnace " + payload.furnace_id + " as ready to move"
         )
       );
       socket.listen(
         "glassmaking.bench_started",
         applyFact(
-          (payload) =>
-            "Piece moved from furnace " +
-            payload.furnace_id +
-            " to bench " +
-            payload.bench_id +
-            "."
+          (payload) => "moves the piece to bench " + payload.bench_id
         )
       );
       socket.listen(
         "glassmaking.completed",
         applyFact(
-          (payload) =>
-            "Bench " +
-            payload.bench_id +
-            " is cooling; a glassblower is free."
+          (payload) => "starts cooling on bench " + payload.bench_id + " and frees a glassblower"
         )
       );
       socket.listen(
         "glass.stored",
         applyFact(
-          (payload) =>
-            "One glass stored (stock " + payload.state.glass + ")."
+          (payload) => "adds one glass to the stock"
         )
       );
       socket.listen(
         "glass.cracked",
         applyFact(
-          (payload) =>
-            "The piece cracked (" +
-            Number(payload.crack_chance).toFixed(0) +
-            "% chance)."
+          (payload) => "shows the cracked piece and its " + Number(payload.crack_chance).toFixed(0) + "% chance"
         )
       );
       socket.listen(
         "sand.stored",
         applyFact(
-          (payload) =>
-            "Sand +" +
-            payload.gained +
-            " (stock " +
-            payload.state.sand +
-            "/30)."
+          (payload) => "adds " + payload.gained + " sand to the stock"
         )
       );
       socket.listen(
         "furnace.purchased",
-        applyFact(() => "adds a new furnace to the village")
+        applyFact(() => "renders a new furnace on the map")
       );
       socket.listen(
         "bench.purchased",
-        applyFact(() => "adds a new bench to the village")
+        applyFact(() => "renders a new bench on the map")
       );
       socket.listen("operation.rejected", (payload) => {
         this.store.lastError = payload.reason || "request rejected";
-        this.store.notice =
-          "Rejected: " + (payload.reason || "request rejected");
+        const noticeValue = "Rejected: " + (payload.reason || "request rejected");
+        this.store.notice = noticeValue;
+        setTimeout(() => {
+          if (this.store.notice === noticeValue) {
+            this.store.notice = null;
+          }
+        }, 3000);
       });
     },
     methods: {
