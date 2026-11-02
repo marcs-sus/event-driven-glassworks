@@ -18,7 +18,10 @@ Phase 3 adds the playable season loop:
   cracked glass.
 * The tick loop resolves heating, bench and sand deadlines.
 
-Purchases and the hardened session/disconnect rules arrive in later phases.
+Phase 5 adds equipment purchases:
+
+* Players spend stored glass on additional furnaces and benches up to four of
+  each.  The session and disconnect hardening rules arrive in a later phase.
 """
 
 from __future__ import annotations
@@ -743,6 +746,60 @@ class Engine:
             },
         )
 
+    # -- equipment purchases ---------------------------------------------
+
+    def purchase_furnace(self, sid: str) -> Fact | Rejection:
+        rejection = self._require_player(sid)
+        if rejection is not None:
+            return rejection
+        if not self.state.season_open:
+            return Rejection.SEASON_NOT_OPEN
+        if len(self.state.furnaces) >= MAX_FURNACES:
+            return Rejection.MAX_FURNACES_REACHED
+
+        cost = purchase_cost(len(self.state.furnaces), self.state.season)
+        if self.state.glass < cost:
+            return Rejection.NOT_ENOUGH_GLASS
+
+        furnace_id = self.allocate_furnace_id()
+        self.state.furnaces[furnace_id] = Furnace(furnace_id)
+        self.state.glass -= cost
+        return Fact(
+            Event.FURNACE_PURCHASED.value,
+            {
+                "state": self.snapshot(),
+                "causa": Cause.PLAYER.value,
+                "furnace_id": furnace_id,
+                "cost": cost,
+            },
+        )
+
+    def purchase_bench(self, sid: str) -> Fact | Rejection:
+        rejection = self._require_player(sid)
+        if rejection is not None:
+            return rejection
+        if not self.state.season_open:
+            return Rejection.SEASON_NOT_OPEN
+        if len(self.state.benches) >= MAX_BENCHES:
+            return Rejection.MAX_BENCHES_REACHED
+
+        cost = purchase_cost(len(self.state.benches), self.state.season)
+        if self.state.glass < cost:
+            return Rejection.NOT_ENOUGH_GLASS
+
+        bench_id = self.allocate_bench_id()
+        self.state.benches[bench_id] = Bench(bench_id)
+        self.state.glass -= cost
+        return Fact(
+            Event.BENCH_PURCHASED.value,
+            {
+                "state": self.snapshot(),
+                "causa": Cause.PLAYER.value,
+                "bench_id": bench_id,
+                "cost": cost,
+            },
+        )
+
     # -- advancement ------------------------------------------------------
 
     def advance(self, now: float) -> list[Fact]:
@@ -874,6 +931,14 @@ class Glassworks:
         self.sio.on(
             Event.GLASS_TAKE_REQUESTED.value,
             self._handle_take_piece,
+        )
+        self.sio.on(
+            Event.FURNACE_PURCHASE_REQUESTED.value,
+            self._handle_purchase_furnace,
+        )
+        self.sio.on(
+            Event.BENCH_PURCHASE_REQUESTED.value,
+            self._handle_purchase_bench,
         )
 
     # -- task bookkeeping -------------------------------------------------
@@ -1085,6 +1150,24 @@ class Glassworks:
                 )
                 return
             outcome = self.engine.take_piece(sid, bench_id)
+            await self._emit_outcome(
+                sid, outcome, Cause.PLAYER.value
+            )
+
+    async def _handle_purchase_furnace(
+        self, sid: str, payload: Any = None
+    ) -> None:
+        async with self.lock:
+            outcome = self.engine.purchase_furnace(sid)
+            await self._emit_outcome(
+                sid, outcome, Cause.PLAYER.value
+            )
+
+    async def _handle_purchase_bench(
+        self, sid: str, payload: Any = None
+    ) -> None:
+        async with self.lock:
+            outcome = self.engine.purchase_bench(sid)
             await self._emit_outcome(
                 sid, outcome, Cause.PLAYER.value
             )

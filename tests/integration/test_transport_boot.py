@@ -22,7 +22,7 @@ class TransportBootTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(task)
         self.assertFalse(task.done())
 
-    async def test_phase_three_registers_gameplay_handlers(self):
+    async def test_gameplay_and_purchase_handlers_registered(self):
         self.assertEqual(
             set(self.application.game.sio.handlers["/"]),
             {
@@ -33,6 +33,8 @@ class TransportBootTest(unittest.IsolatedAsyncioTestCase):
                 "glassmaking.requested",
                 "glassmaking.bench_requested",
                 "glass.take_requested",
+                "furnace.purchase_requested",
+                "bench.purchase_requested",
             },
         )
 

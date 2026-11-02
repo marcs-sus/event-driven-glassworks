@@ -44,6 +44,8 @@
       "glass.stored": "one glass added",
       "glass.cracked": "piece cracked",
       "sand.stored": "sand added",
+      "furnace.purchased": "adds a new furnace to the village",
+      "bench.purchased": "adds a new bench to the village",
     };
     if (reactions[name]) {
       return reactions[name];

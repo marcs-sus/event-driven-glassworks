@@ -89,9 +89,26 @@
                 Close season
               </button>
             </template>
-            <p v-else-if="store.role === 'player'" class="hint">
-              Click a furnace to start a piece.
-            </p>
+            <template v-else-if="store.role === 'player'">
+              <template v-if="snapshot && snapshot.season_open">
+                <button
+                  class="primary"
+                  type="button"
+                  :disabled="!store.canAffordFurnace"
+                  @click="purchaseFurnace"
+                >
+                  Buy furnace ({{ store.furnaceCost }} glass)
+                </button>
+                <button
+                  type="button"
+                  :disabled="!store.canAffordBench"
+                  @click="purchaseBench"
+                >
+                  Buy bench ({{ store.benchCost }} glass)
+                </button>
+              </template>
+              <p class="hint">Click a furnace to start a piece.</p>
+            </template>
             <p v-if="store.notice" class="notice">{{ store.notice }}</p>
             <p v-if="store.lastError" class="error">
               {{ store.lastError }}

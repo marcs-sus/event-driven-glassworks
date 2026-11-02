@@ -140,6 +140,9 @@
     }
 
     showState(snapshot) {
+      // Every snapshot-bearing fact reaches this single render path through
+      // main.js (state.synced, furnace.purchased, bench.purchased and the
+      // production facts), so new equipment is drawn by the same rebuild.
       if (!snapshot) {
         return;
       }

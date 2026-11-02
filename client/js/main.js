@@ -151,6 +151,14 @@
             "/30)."
         )
       );
+      socket.listen(
+        "furnace.purchased",
+        applyFact(() => "adds a new furnace to the village")
+      );
+      socket.listen(
+        "bench.purchased",
+        applyFact(() => "adds a new bench to the village")
+      );
       socket.listen("operation.rejected", (payload) => {
         this.store.lastError = payload.reason || "request rejected";
         this.store.notice =
@@ -169,6 +177,12 @@
       },
       closeSeason() {
         store.closeSeason();
+      },
+      purchaseFurnace() {
+        store.purchaseFurnace();
+      },
+      purchaseBench() {
+        store.purchaseBench();
       },
       clearEvents() {
         store.clearEvents();

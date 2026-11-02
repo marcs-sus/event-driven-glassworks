@@ -9,6 +9,13 @@
 
   const { reactive } = global.Vue;
 
+  const MAX_EQUIPMENT = 4;
+
+  // Mirror of the server's purchase formula: count * season * 2 + 1.
+  function purchaseCost(count, season) {
+    return count * season * 2 + 1;
+  }
+
   const state = reactive({
     snapshot: null,
     role: null,
@@ -19,6 +26,41 @@
     serverOffset: 0,
     events: [],
     nextEventId: 1,
+    get currentFurnaces() {
+      return this.snapshot && Array.isArray(this.snapshot.furnaces)
+        ? this.snapshot.furnaces.length
+        : 0;
+    },
+    get currentBenches() {
+      return this.snapshot && Array.isArray(this.snapshot.benches)
+        ? this.snapshot.benches.length
+        : 0;
+    },
+    get currentSeason() {
+      return this.snapshot && typeof this.snapshot.season === "number"
+        ? this.snapshot.season
+        : 0;
+    },
+    get furnaceCost() {
+      return purchaseCost(this.currentFurnaces, this.currentSeason);
+    },
+    get benchCost() {
+      return purchaseCost(this.currentBenches, this.currentSeason);
+    },
+    get canAffordFurnace() {
+      return (
+        !!this.snapshot &&
+        this.currentFurnaces < MAX_EQUIPMENT &&
+        this.snapshot.glass >= this.furnaceCost
+      );
+    },
+    get canAffordBench() {
+      return (
+        !!this.snapshot &&
+        this.currentBenches < MAX_EQUIPMENT &&
+        this.snapshot.glass >= this.benchCost
+      );
+    },
   });
 
   function applySnapshot(snapshot, cause) {
@@ -82,20 +124,25 @@
     emitRequest("glass.take_requested", { bench_id: benchId });
   }
 
-  // Phase 2 names kept as aliases so older call sites keep working.
-  const openSeason = startSeason;
-  const takeGlass = takePiece;
-
-  function buyFurnace() {
+  // Phase 5 purchase helpers.  Costs are display-only mirrors of the server
+  // rule; the engine remains authoritative.
+  function purchaseFurnace() {
     emitRequest("furnace.purchase_requested", {});
   }
 
-  function buyBench() {
+  function purchaseBench() {
     emitRequest("bench.purchase_requested", {});
   }
 
+  // Phase 2 names kept as aliases so older call sites keep working.
+  const openSeason = startSeason;
+  const takeGlass = takePiece;
+  const buyFurnace = purchaseFurnace;
+  const buyBench = purchaseBench;
+
   global.GlassworksStore = {
     state,
+    purchaseCost,
     applySnapshot,
     logEvent,
     clearEvents,
@@ -106,6 +153,8 @@
     takePiece,
     openSeason,
     takeGlass,
+    purchaseFurnace,
+    purchaseBench,
     buyFurnace,
     buyBench,
   };
