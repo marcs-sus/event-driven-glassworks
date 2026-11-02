@@ -81,8 +81,7 @@
       direction,
       timestamp: new Date().toLocaleTimeString(),
       name,
-      cause:
-        data.causa || data.cause || (direction === "up" ? "client" : "—"),
+      cause: data.causa || data.cause || (direction === "up" ? "client" : "—"),
       payload: JSON.stringify(data),
       reaction: reaction || "",
     });

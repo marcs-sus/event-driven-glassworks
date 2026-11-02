@@ -92,20 +92,12 @@
           color: "#ffffff",
         })
         .setOrigin(0.5);
-      const pieceColor = piece
-        ? PIECE_COLORS[piece.state] || color
-        : 0x2a211a;
+      const pieceColor = piece ? PIECE_COLORS[piece.state] || color : 0x2a211a;
       const indicator = this.add
         .circle(34, -26, 9, pieceColor, piece ? 1 : 0.35)
         .setStrokeStyle(2, 0x120e0b, 0.85);
 
-      container.add([
-        glow,
-        body,
-        titleText,
-        statusText,
-        indicator,
-      ]);
+      container.add([glow, body, titleText, statusText, indicator]);
 
       body.setInteractive({ useHandCursor: Boolean(onClick) });
       body.on("pointerover", () => {
@@ -183,7 +175,7 @@
           piece ? this.pieceLabel(piece) : "free",
           0xd9772f,
           piece,
-          onFurnaceClick
+          onFurnaceClick,
         );
         this.furnaceGroup.add(station);
       });
@@ -194,11 +186,7 @@
             ? null
             : pieces[String(bench.piece_id)] || null;
         const onBenchClick = () => {
-          if (
-            store &&
-            piece &&
-            piece.state === "bench_cooling"
-          ) {
+          if (store && piece && piece.state === "bench_cooling") {
             store.takePiece(bench.id);
           }
         };
@@ -209,7 +197,7 @@
           piece ? this.pieceLabel(piece) : "free",
           0x4d8fc4,
           piece,
-          onBenchClick
+          onBenchClick,
         );
         this.benchGroup.add(station);
       });
@@ -227,7 +215,7 @@
           "  ·  glassblowers " +
           workers.busy +
           "/" +
-          workers.total
+          workers.total,
       );
     }
   }

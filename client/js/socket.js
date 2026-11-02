@@ -97,7 +97,8 @@
   socket.on("connect_error", (error) => {
     if (store) {
       store.state.connected = false;
-      store.state.lastError = error && error.message ? error.message : "connection error";
+      store.state.lastError =
+        error && error.message ? error.message : "connection error";
     }
     logIncoming("connect_error", {
       cause: "connection",
@@ -116,7 +117,7 @@
         "up",
         "connect",
         { role: role, cause: "client" },
-        "auth sent"
+        "auth sent",
       );
     }
     socket.auth = { role: role };

@@ -51,6 +51,11 @@
               <span class="sub">cap 30</span>
             </div>
             <div class="stat">
+              <span class="label">Next sand</span>
+              <span class="value">{{ sandTickLabel }}</span>
+              <span class="sub">+6 every 10s</span>
+            </div>
+            <div class="stat">
               <span class="label">Glass</span>
               <span class="value">{{ glassLabel }}</span>
               <span class="sub">stock</span>
@@ -110,9 +115,7 @@
               <p class="hint">Click a furnace to start a piece.</p>
             </template>
             <p v-if="store.notice" class="notice">{{ store.notice }}</p>
-            <p v-if="store.lastError" class="error">
-              {{ store.lastError }}
-            </p>
+            <p v-if="store.lastError" class="error">{{ store.lastError }}</p>
           </div>
         </section>
 
