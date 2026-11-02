@@ -33,6 +33,21 @@
     if (name === "connect_error") {
       return "connection error";
     }
+
+    const reactions = {
+      "glassworks.started": "new season open",
+      "glassworks.closed": "season closed",
+      "glassmaking.started": "furnace heating",
+      "glassmaking.heated": "piece ready",
+      "glassmaking.bench_started": "piece moved to bench",
+      "glassmaking.completed": "cooling started · glassblower freed",
+      "glass.stored": "one glass added",
+      "glass.cracked": "piece cracked",
+      "sand.stored": "sand added",
+    };
+    if (reactions[name]) {
+      return reactions[name];
+    }
     if (payload && payload.state) {
       return "state updated";
     }
@@ -56,10 +71,10 @@
 
   function emitRequest(name, payload) {
     const data = payload == null ? {} : payload;
-    socket.emit(name, data);
     if (store) {
       store.logEvent("up", name, data, "request sent");
     }
+    socket.emit(name, data);
   }
 
   socket.on("connect", () => {

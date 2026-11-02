@@ -11,15 +11,14 @@ A single-process ASGI application organised into clearly commented sections:
 7. static     -- stdlib ASGI static-file wrapper (client/ and /assets)
 8. entry      -- ASGI app factory; run with ``uvicorn server:app``
 
-Phase 2 intentionally implements only the connection flow:
+Phase 3 adds the playable season loop:
 
-* role selection from the Socket.IO connection auth payload
-* the single-Master slot
-* one ``state.synced`` snapshot per accepted connection
-* ``operation.rejected`` for connection validation failures
+* Masters open and close seasons.
+* Players heat pieces in furnaces, move them to benches, and take stored or
+  cracked glass.
+* The tick loop resolves heating, bench and sand deadlines.
 
-No season, production, sand, purchase or disconnect-close behaviour is
-implemented here; those arrive in later phases.
+Purchases and the hardened session/disconnect rules arrive in later phases.
 """
 
 from __future__ import annotations
@@ -84,9 +83,8 @@ class ManualClock:
 class Event(str, Enum):
     """Every event name in the contract.
 
-    Phase 2 registers only ``state.synced`` and ``operation.rejected``; the
-    remaining names are defined now so later phases cannot drift from the
-    contract.
+    Phase 3 emits the season, glassmaking and sand facts; purchase facts are
+    reserved for the equipment phase.
     """
 
     STATE_SYNCED = "state.synced"
@@ -504,16 +502,327 @@ class Engine:
         self.state.next_bench_id += 1
         return bench_id
 
+    # -- role helpers -----------------------------------------------------
+
+    def _role(self, sid: str) -> Role | None:
+        session = self.sessions.get(sid)
+        return session.role if session is not None else None
+
+    def _require_master(
+        self, sid: str, wrong_role: Rejection
+    ) -> Rejection | None:
+        role = self._role(sid)
+        if role is None:
+            return Rejection.INVALID_ROLE
+        if role is not Role.MASTER:
+            return wrong_role
+        return None
+
+    def _require_player(self, sid: str) -> Rejection | None:
+        role = self._role(sid)
+        if role is None:
+            return Rejection.INVALID_ROLE
+        if role is not Role.PLAYER:
+            return Rejection.ONLY_PLAYERS_CAN_INTERACT
+        return None
+
+    # -- state helpers ----------------------------------------------------
+
+    def _clear_pieces(self) -> None:
+        self.state.pieces.clear()
+        for furnace in self.state.furnaces.values():
+            furnace.piece_id = None
+        for bench in self.state.benches.values():
+            bench.piece_id = None
+            bench.cooling_ends_at = None
+        self.state.glassblowers_busy = self.state.busy_count()
+
+    def _remove_piece(self, piece: Piece) -> None:
+        self.state.pieces.pop(piece.id, None)
+        if piece.furnace_id is not None:
+            furnace = self.state.furnaces.get(piece.furnace_id)
+            if furnace is not None and furnace.piece_id == piece.id:
+                furnace.piece_id = None
+        if piece.bench_id is not None:
+            bench = self.state.benches.get(piece.bench_id)
+            if bench is not None and bench.piece_id == piece.id:
+                bench.piece_id = None
+                bench.cooling_ends_at = None
+        self.state.glassblowers_busy = self.state.busy_count()
+
+    # -- season actions ---------------------------------------------------
+
+    def start_season(self, sid: str) -> Fact | Rejection:
+        rejection = self._require_master(
+            sid, Rejection.ONLY_MASTER_CAN_OPEN_SEASON
+        )
+        if rejection is not None:
+            return rejection
+        if self.state.season_open:
+            return Rejection.SEASON_ALREADY_OPEN
+
+        self.state.season += 1
+        self.state.sand = INITIAL_SAND
+        self.state.glass = 0
+        self._clear_pieces()
+        self.state.season_open = True
+        self.state.next_sand_tick_at = (
+            self.clock.now() + SAND_REFILL_INTERVAL_SECONDS
+        )
+        return Fact(
+            Event.GLASSWORKS_STARTED.value,
+            {
+                "state": self.snapshot(),
+                "causa": Cause.MASTER.value,
+            },
+        )
+
+    def close_season(self, sid: str) -> Fact | Rejection:
+        rejection = self._require_master(
+            sid, Rejection.ONLY_MASTER_CAN_CLOSE_SEASON
+        )
+        if rejection is not None:
+            return rejection
+        if not self.state.season_open:
+            return Rejection.SEASON_NOT_OPEN
+
+        self._clear_pieces()
+        self.state.season_open = False
+        self.state.next_sand_tick_at = None
+        return Fact(
+            Event.GLASSWORKS_CLOSED.value,
+            {
+                "state": self.snapshot(),
+                "causa": Cause.MASTER.value,
+            },
+        )
+
+    # -- production actions ----------------------------------------------
+
+    def request_piece(
+        self, sid: str, furnace_id: int
+    ) -> Fact | Rejection:
+        rejection = self._require_player(sid)
+        if rejection is not None:
+            return rejection
+        if not self.state.season_open:
+            return Rejection.SEASON_NOT_OPEN
+
+        furnace = self.state.furnaces.get(furnace_id)
+        if furnace is None:
+            return Rejection.UNKNOWN_FURNACE
+        if furnace.piece_id is not None:
+            return Rejection.FURNACE_BUSY
+        if self.state.sand < SAND_PER_PIECE:
+            return Rejection.NOT_ENOUGH_SAND
+        if (
+            self.state.glassblowers_busy
+            >= self.state.glassblowers_total
+        ):
+            return Rejection.NO_FREE_WORKER
+
+        now = self.clock.now()
+        self.state.sand -= SAND_PER_PIECE
+        piece = Piece(
+            id=self.allocate_piece_id(),
+            state=PieceState.FURNACE_HEATING,
+            furnace_id=furnace_id,
+            ready_at=now + HEATING_SECONDS,
+        )
+        self.state.pieces[piece.id] = piece
+        furnace.piece_id = piece.id
+        self.state.glassblowers_busy = self.state.busy_count()
+        return Fact(
+            Event.GLASSMAKING_STARTED.value,
+            {
+                "state": self.snapshot(),
+                "causa": Cause.PLAYER.value,
+                "furnace_id": furnace_id,
+            },
+        )
+
+    def move_to_bench(
+        self, sid: str, furnace_id: int
+    ) -> Fact | Rejection:
+        rejection = self._require_player(sid)
+        if rejection is not None:
+            return rejection
+        if not self.state.season_open:
+            return Rejection.SEASON_NOT_OPEN
+
+        furnace = self.state.furnaces.get(furnace_id)
+        if furnace is None:
+            return Rejection.UNKNOWN_FURNACE
+
+        piece = (
+            self.state.pieces.get(furnace.piece_id)
+            if furnace.piece_id is not None
+            else None
+        )
+        if piece is None or piece.state is not PieceState.FURNACE_READY:
+            return Rejection.PIECE_NOT_READY
+
+        bench = next(
+            (
+                candidate
+                for candidate in sorted(
+                    self.state.benches.values(),
+                    key=lambda item: item.id,
+                )
+                if candidate.piece_id is None
+            ),
+            None,
+        )
+        if bench is None:
+            return Rejection.BENCH_BUSY
+
+        now = self.clock.now()
+        piece.state = PieceState.BENCH_WORKING
+        piece.furnace_id = None
+        piece.bench_id = bench.id
+        piece.ready_at = now + BENCH_SECONDS
+        piece.cooling_started_at = None
+        piece.cooling_ends_at = None
+        furnace.piece_id = None
+        bench.piece_id = piece.id
+        bench.cooling_ends_at = None
+        self.state.glassblowers_busy = self.state.busy_count()
+        return Fact(
+            Event.GLASSMAKING_BENCH_STARTED.value,
+            {
+                "state": self.snapshot(),
+                "causa": Cause.PLAYER.value,
+                "furnace_id": furnace_id,
+                "bench_id": bench.id,
+            },
+        )
+
+    def take_piece(self, sid: str, bench_id: int) -> Fact | Rejection:
+        rejection = self._require_player(sid)
+        if rejection is not None:
+            return rejection
+        if not self.state.season_open:
+            return Rejection.SEASON_NOT_OPEN
+
+        bench = self.state.benches.get(bench_id)
+        if bench is None:
+            return Rejection.UNKNOWN_BENCH
+
+        piece = (
+            self.state.pieces.get(bench.piece_id)
+            if bench.piece_id is not None
+            else None
+        )
+        if piece is None or piece.state is not PieceState.BENCH_COOLING:
+            return Rejection.NO_PIECE_TO_TAKE
+
+        now = self.clock.now()
+        started = piece.cooling_started_at
+        elapsed = max(0.0, now - started) if started is not None else 0.0
+        chance = crack_chance(elapsed)
+        if self.rng.random() * 100.0 < chance:
+            self._remove_piece(piece)
+            return Fact(
+                Event.GLASS_CRACKED.value,
+                {
+                    "state": self.snapshot(),
+                    "causa": Cause.PLAYER.value,
+                    "bench_id": bench_id,
+                    "crack_chance": chance,
+                },
+            )
+
+        self.state.glass += 1
+        self._remove_piece(piece)
+        return Fact(
+            Event.GLASS_STORED.value,
+            {
+                "state": self.snapshot(),
+                "causa": Cause.PLAYER.value,
+                "bench_id": bench_id,
+            },
+        )
+
     # -- advancement ------------------------------------------------------
 
     def advance(self, now: float) -> list[Fact]:
-        """Process due deadlines and return facts to broadcast.
+        """Process every due heating, bench and sand deadline."""
 
-        Phase 2 has no scheduled game behaviour, so this is intentionally a
-        no-op. Later phases add sand, furnace and bench deadlines here.
-        """
+        facts: list[Fact] = []
 
-        return []
+        for piece in sorted(
+            self.state.pieces.values(), key=lambda item: item.id
+        ):
+            if (
+                piece.state is PieceState.FURNACE_HEATING
+                and piece.ready_at is not None
+                and piece.ready_at <= now
+            ):
+                piece.state = PieceState.FURNACE_READY
+                piece.ready_at = None
+                self.state.glassblowers_busy = self.state.busy_count()
+                facts.append(
+                    Fact(
+                        Event.GLASSMAKING_HEATED.value,
+                        {
+                            "state": self.state.snapshot(now),
+                            "causa": Cause.TIMER.value,
+                            "furnace_id": piece.furnace_id,
+                        },
+                    )
+                )
+
+        for piece in sorted(
+            self.state.pieces.values(), key=lambda item: item.id
+        ):
+            if (
+                piece.state is PieceState.BENCH_WORKING
+                and piece.ready_at is not None
+                and piece.ready_at <= now
+            ):
+                piece.state = PieceState.BENCH_COOLING
+                piece.ready_at = None
+                piece.cooling_started_at = now
+                piece.cooling_ends_at = now + COOLING_SECONDS
+                if piece.bench_id is not None:
+                    bench = self.state.benches.get(piece.bench_id)
+                    if bench is not None:
+                        bench.cooling_ends_at = piece.cooling_ends_at
+                self.state.glassblowers_busy = self.state.busy_count()
+                facts.append(
+                    Fact(
+                        Event.GLASSMAKING_COMPLETED.value,
+                        {
+                            "state": self.state.snapshot(now),
+                            "causa": Cause.TIMER.value,
+                            "bench_id": piece.bench_id,
+                            "cooling_ends_at": piece.cooling_ends_at,
+                        },
+                    )
+                )
+
+        if (
+            self.state.season_open
+            and self.state.next_sand_tick_at is not None
+            and self.state.next_sand_tick_at <= now
+        ):
+            gained = sand_refill(self.state.sand)
+            self.state.sand += gained
+            self.state.next_sand_tick_at = (
+                now + SAND_REFILL_INTERVAL_SECONDS
+            )
+            facts.append(
+                Fact(
+                    Event.SAND_STORED.value,
+                    {
+                        "state": self.state.snapshot(now),
+                        "causa": Cause.SAND_TICK.value,
+                        "gained": gained,
+                    },
+                )
+            )
+
+        return facts
 
 
 # ---------------------------------------------------------------------------
@@ -546,6 +855,26 @@ class Glassworks:
 
         self.sio.on("connect", self._handle_connect)
         self.sio.on("disconnect", self._handle_disconnect)
+        self.sio.on(
+            Event.GLASSWORKS_START_REQUESTED.value,
+            self._handle_start_season,
+        )
+        self.sio.on(
+            Event.GLASSWORKS_CLOSE_REQUESTED.value,
+            self._handle_close_season,
+        )
+        self.sio.on(
+            Event.GLASSMAKING_REQUESTED.value,
+            self._handle_request_piece,
+        )
+        self.sio.on(
+            Event.GLASSMAKING_BENCH_REQUESTED.value,
+            self._handle_move_to_bench,
+        )
+        self.sio.on(
+            Event.GLASS_TAKE_REQUESTED.value,
+            self._handle_take_piece,
+        )
 
     # -- task bookkeeping -------------------------------------------------
 
@@ -650,6 +979,115 @@ class Glassworks:
                 to=sid,
             )
             await self.sio.disconnect(sid)
+
+    # -- gameplay handlers ------------------------------------------------
+
+    @staticmethod
+    def _is_mapping(payload: Any) -> bool:
+        return payload is None or isinstance(payload, dict)
+
+    @staticmethod
+    def _int_field(payload: Any, key: str) -> int | None:
+        if not isinstance(payload, dict):
+            return None
+        value = payload.get(key)
+        # JSON integers only: exclude booleans, which subclass int in Python.
+        return value if type(value) is int else None
+
+    async def _emit_outcome(
+        self, sid: str, outcome: Fact | Rejection, cause: str
+    ) -> None:
+        if isinstance(outcome, Rejection):
+            await self.sio.emit(
+                Event.OPERATION_REJECTED.value,
+                {"causa": cause, "reason": outcome.value},
+                to=sid,
+            )
+            return
+        await self.broadcast(outcome.event, outcome.payload)
+
+    async def _reject_malformed(self, sid: str, cause: str) -> None:
+        await self.sio.emit(
+            Event.OPERATION_REJECTED.value,
+            {
+                "causa": cause,
+                "reason": Rejection.MALFORMED_PAYLOAD.value,
+            },
+            to=sid,
+        )
+
+    async def _handle_start_season(
+        self, sid: str, payload: Any = None
+    ) -> None:
+        async with self.lock:
+            if not self._is_mapping(payload):
+                await self._reject_malformed(
+                    sid, Cause.MASTER.value
+                )
+                return
+            outcome = self.engine.start_season(sid)
+            await self._emit_outcome(
+                sid, outcome, Cause.MASTER.value
+            )
+
+    async def _handle_close_season(
+        self, sid: str, payload: Any = None
+    ) -> None:
+        async with self.lock:
+            if not self._is_mapping(payload):
+                await self._reject_malformed(
+                    sid, Cause.MASTER.value
+                )
+                return
+            outcome = self.engine.close_season(sid)
+            await self._emit_outcome(
+                sid, outcome, Cause.MASTER.value
+            )
+
+    async def _handle_request_piece(
+        self, sid: str, payload: Any = None
+    ) -> None:
+        async with self.lock:
+            furnace_id = self._int_field(payload, "furnace_id")
+            if furnace_id is None:
+                await self._reject_malformed(
+                    sid, Cause.PLAYER.value
+                )
+                return
+            outcome = self.engine.request_piece(sid, furnace_id)
+            await self._emit_outcome(
+                sid, outcome, Cause.PLAYER.value
+            )
+
+    async def _handle_move_to_bench(
+        self, sid: str, payload: Any = None
+    ) -> None:
+        async with self.lock:
+            furnace_id = self._int_field(payload, "furnace_id")
+            if furnace_id is None:
+                await self._reject_malformed(
+                    sid, Cause.PLAYER.value
+                )
+                return
+            outcome = self.engine.move_to_bench(sid, furnace_id)
+            await self._emit_outcome(
+                sid, outcome, Cause.PLAYER.value
+            )
+
+    async def _handle_take_piece(
+        self, sid: str, payload: Any = None
+    ) -> None:
+        async with self.lock:
+            bench_id = self._int_field(payload, "bench_id")
+            if bench_id is None:
+                await self._reject_malformed(
+                    sid, Cause.PLAYER.value
+                )
+                return
+            outcome = self.engine.take_piece(sid, bench_id)
+            await self._emit_outcome(
+                sid, outcome, Cause.PLAYER.value
+            )
 
     # -- broadcasting and ticking ----------------------------------------
 

@@ -15,6 +15,7 @@
     connected: false,
     lastError: null,
     lastCause: null,
+    notice: "",
     serverOffset: 0,
     events: [],
     nextEventId: 1,
@@ -59,9 +60,9 @@
     global.GlassworksSocket.emitRequest(name, payload);
   }
 
-  // Phase 2 request helpers.  The server registers these handlers in later
-  // phases; keeping them here satisfies the single client request surface.
-  function openSeason() {
+  // Phase 3 request helpers.  Each one goes through emitRequest so the event
+  // panel records the ⬆ emit row before the socket write.
+  function startSeason() {
     emitRequest("glassworks.start_requested", {});
   }
 
@@ -77,9 +78,13 @@
     emitRequest("glassmaking.bench_requested", { furnace_id: furnaceId });
   }
 
-  function takeGlass(benchId) {
+  function takePiece(benchId) {
     emitRequest("glass.take_requested", { bench_id: benchId });
   }
+
+  // Phase 2 names kept as aliases so older call sites keep working.
+  const openSeason = startSeason;
+  const takeGlass = takePiece;
 
   function buyFurnace() {
     emitRequest("furnace.purchase_requested", {});
@@ -94,10 +99,12 @@
     applySnapshot,
     logEvent,
     clearEvents,
-    openSeason,
+    startSeason,
     closeSeason,
     requestPiece,
     moveToBench,
+    takePiece,
+    openSeason,
     takeGlass,
     buyFurnace,
     buyBench,

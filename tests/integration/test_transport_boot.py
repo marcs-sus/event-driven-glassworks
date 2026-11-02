@@ -22,10 +22,18 @@ class TransportBootTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(task)
         self.assertFalse(task.done())
 
-    async def test_phase_two_registers_only_connection_handlers(self):
+    async def test_phase_three_registers_gameplay_handlers(self):
         self.assertEqual(
             set(self.application.game.sio.handlers["/"]),
-            {"connect", "disconnect"},
+            {
+                "connect",
+                "disconnect",
+                "glassworks.start_requested",
+                "glassworks.close_requested",
+                "glassmaking.requested",
+                "glassmaking.bench_requested",
+                "glass.take_requested",
+            },
         )
 
     async def test_cors_allows_any_origin(self):

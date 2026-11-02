@@ -202,6 +202,43 @@ button.ghost:hover {
   font-size: 0.78rem;
 }
 
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 0.75rem 0.9rem;
+  background: linear-gradient(180deg, var(--panel-2), var(--panel));
+}
+
+.controls .hint,
+.controls .notice {
+  margin: 0;
+  color: var(--muted);
+}
+
+.controls .notice {
+  color: var(--gold);
+}
+
+.controls .error {
+  margin: 0;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+  transform: none;
+}
+
+button:disabled:hover {
+  border-color: var(--line);
+  background: linear-gradient(180deg, #34271d, #241a13);
+  transform: none;
+}
+
 .side-column {
   display: flex;
   flex-direction: column;

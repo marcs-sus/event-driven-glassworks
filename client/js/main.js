@@ -49,21 +49,112 @@
           ? "Connected as " + this.roleLabel
           : "Disconnected";
       },
+      canOpenSeason() {
+        return !!this.snapshot && !this.snapshot.season_open;
+      },
+      canCloseSeason() {
+        return !!this.snapshot && this.snapshot.season_open;
+      },
     },
     mounted() {
       if (global.GlassworksScene && global.GlassworksScene.createGame) {
         global.GlassworksScene.createGame();
       }
 
-      socket.listen("state.synced", (payload) => {
-        store.applySnapshot(payload.state, payload.causa);
-        if (global.game) {
-          global.game.showState(payload.state);
+      const applyFact = (reaction) => (payload) => {
+        if (payload && payload.state) {
+          store.applySnapshot(payload.state, payload.causa);
+          if (global.game) {
+            global.game.showState(payload.state);
+          }
         }
-      });
+        this.store.lastError = null;
+        this.store.notice =
+          typeof reaction === "function"
+            ? reaction(payload || {})
+            : reaction;
+      };
 
+      socket.listen(
+        "state.synced",
+        applyFact(() => "State synchronized.")
+      );
+      socket.listen(
+        "glassworks.started",
+        applyFact(
+          (payload) => "Season " + payload.state.season + " is open."
+        )
+      );
+      socket.listen(
+        "glassworks.closed",
+        applyFact(
+          (payload) =>
+            "Season closed with " + payload.state.glass + " glass stored."
+        )
+      );
+      socket.listen(
+        "glassmaking.started",
+        applyFact(
+          (payload) => "Furnace " + payload.furnace_id + " is heating."
+        )
+      );
+      socket.listen(
+        "glassmaking.heated",
+        applyFact(
+          (payload) => "Furnace " + payload.furnace_id + " piece is ready."
+        )
+      );
+      socket.listen(
+        "glassmaking.bench_started",
+        applyFact(
+          (payload) =>
+            "Piece moved from furnace " +
+            payload.furnace_id +
+            " to bench " +
+            payload.bench_id +
+            "."
+        )
+      );
+      socket.listen(
+        "glassmaking.completed",
+        applyFact(
+          (payload) =>
+            "Bench " +
+            payload.bench_id +
+            " is cooling; a glassblower is free."
+        )
+      );
+      socket.listen(
+        "glass.stored",
+        applyFact(
+          (payload) =>
+            "One glass stored (stock " + payload.state.glass + ")."
+        )
+      );
+      socket.listen(
+        "glass.cracked",
+        applyFact(
+          (payload) =>
+            "The piece cracked (" +
+            Number(payload.crack_chance).toFixed(0) +
+            "% chance)."
+        )
+      );
+      socket.listen(
+        "sand.stored",
+        applyFact(
+          (payload) =>
+            "Sand +" +
+            payload.gained +
+            " (stock " +
+            payload.state.sand +
+            "/30)."
+        )
+      );
       socket.listen("operation.rejected", (payload) => {
         this.store.lastError = payload.reason || "request rejected";
+        this.store.notice =
+          "Rejected: " + (payload.reason || "request rejected");
       });
     },
     methods: {
@@ -72,6 +163,12 @@
       },
       leave() {
         socket.disconnect();
+      },
+      openSeason() {
+        store.startSeason();
+      },
+      closeSeason() {
+        store.closeSeason();
       },
       clearEvents() {
         store.clearEvents();

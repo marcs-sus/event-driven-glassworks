@@ -70,6 +70,33 @@
               >
             </div>
           </div>
+
+          <div class="controls" v-if="store.connected">
+            <template v-if="store.role === 'master'">
+              <button
+                class="primary"
+                type="button"
+                :disabled="!canOpenSeason"
+                @click="openSeason"
+              >
+                Open season
+              </button>
+              <button
+                type="button"
+                :disabled="!canCloseSeason"
+                @click="closeSeason"
+              >
+                Close season
+              </button>
+            </template>
+            <p v-else-if="store.role === 'player'" class="hint">
+              Click a furnace to start a piece.
+            </p>
+            <p v-if="store.notice" class="notice">{{ store.notice }}</p>
+            <p v-if="store.lastError" class="error">
+              {{ store.lastError }}
+            </p>
+          </div>
         </section>
 
         <aside class="side-column">

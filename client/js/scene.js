@@ -15,6 +15,13 @@
     bench_cooling: "cooling",
   };
 
+  const PIECE_COLORS = {
+    furnace_heating: 0xd9772f,
+    furnace_ready: 0xf2c14e,
+    bench_working: 0xd9772f,
+    bench_cooling: 0x5fd6e5,
+  };
+
   class VillageScene extends Phaser.Scene {
     constructor() {
       super("VillageScene");
@@ -65,7 +72,7 @@
       return "#" + piece.id + " " + label;
     }
 
-    makeStation(x, y, title, status, color, piece) {
+    makeStation(x, y, title, status, color, piece, onClick) {
       const container = this.add.container(x, y);
       const glow = this.add.circle(0, 0, 46, color, 0.16);
       const body = this.add
@@ -85,14 +92,45 @@
           color: "#ffffff",
         })
         .setOrigin(0.5);
+      const pieceColor = piece
+        ? PIECE_COLORS[piece.state] || color
+        : 0x2a211a;
+      const indicator = this.add
+        .circle(34, -26, 9, pieceColor, piece ? 1 : 0.35)
+        .setStrokeStyle(2, 0x120e0b, 0.85);
 
-      container.add([glow, body, titleText, statusText]);
+      container.add([
+        glow,
+        body,
+        titleText,
+        statusText,
+        indicator,
+      ]);
+
+      body.setInteractive({ useHandCursor: Boolean(onClick) });
+      body.on("pointerover", () => {
+        body.setStrokeStyle(3, 0xffffff, 1);
+      });
+      body.on("pointerout", () => {
+        body.setStrokeStyle(3, 0xffe6b0, 0.75);
+      });
+      if (onClick) {
+        body.on("pointerup", onClick);
+      }
 
       if (piece && piece.state === "furnace_ready") {
         this.tweens.add({
           targets: glow,
           alpha: { from: 0.12, to: 0.48 },
           duration: 700,
+          yoyo: true,
+          repeat: -1,
+        });
+      } else if (piece && piece.state === "bench_cooling") {
+        this.tweens.add({
+          targets: indicator,
+          alpha: { from: 0.45, to: 1 },
+          duration: 900,
           yoyo: true,
           repeat: -1,
         });
@@ -118,19 +156,31 @@
       const furnaces = snapshot.furnaces || [];
       const benches = snapshot.benches || [];
       const pieces = snapshot.pieces || {};
+      const store = global.GlassworksStore;
 
       furnaces.forEach((furnace, index) => {
         const piece =
           furnace.piece_id == null
             ? null
             : pieces[String(furnace.piece_id)] || null;
+        const onFurnaceClick = () => {
+          if (!store) {
+            return;
+          }
+          if (piece == null) {
+            store.requestPiece(furnace.id);
+          } else if (piece.state === "furnace_ready") {
+            store.moveToBench(furnace.id);
+          }
+        };
         const station = this.makeStation(
           150 + index * 190,
           120,
           "Furnace " + furnace.id,
           piece ? this.pieceLabel(piece) : "free",
           0xd9772f,
-          piece
+          piece,
+          onFurnaceClick
         );
         this.furnaceGroup.add(station);
       });
@@ -140,13 +190,23 @@
           bench.piece_id == null
             ? null
             : pieces[String(bench.piece_id)] || null;
+        const onBenchClick = () => {
+          if (
+            store &&
+            piece &&
+            piece.state === "bench_cooling"
+          ) {
+            store.takePiece(bench.id);
+          }
+        };
         const station = this.makeStation(
           150 + index * 190,
           480,
           "Bench " + bench.id,
           piece ? this.pieceLabel(piece) : "free",
           0x4d8fc4,
-          piece
+          piece,
+          onBenchClick
         );
         this.benchGroup.add(station);
       });
