@@ -462,6 +462,26 @@ class Engine:
         self.sessions: dict[str, Session] = {}
         self.master_sid: str | None = None
 
+    # -- validation helpers -------------------------------------------------
+
+    @staticmethod
+    def _payload_is_mapping(payload: Any) -> bool:
+        """True if the payload is a mapping (dict) and not None."""
+        return isinstance(payload, dict)
+
+    @staticmethod
+    def _payload_id(payload: Any, field: str) -> int | None:
+        """
+        Return the integer value of `field` in `payload` if present and a real int.
+        None if missing or not a real int (reject bool, which is a subclass of int).
+        Used by all handlers that require ids.
+        """
+        if not isinstance(payload, dict):
+            return None
+        value = payload.get(field)
+        # JSON integers only: exclude booleans, which subclass int in Python.
+        return value if type(value) is int else None
+
     # -- sessions ---------------------------------------------------------
 
     def join(self, sid: str, role: Role, name: str | None = None) -> Session:
@@ -1017,9 +1037,22 @@ class Glassworks:
         self, sid: str, reason: str | None = None
     ) -> None:
         async with self.lock:
+            was_master = self.engine.master_sid == sid
             self.engine.leave(sid)
-            # Phase 6 adds: if this was the Master and the season is open,
-            # close it with cause master_disconnected before releasing.
+
+            if was_master and self.engine.state.season_open:
+                self.engine._clear_pieces()
+                self.engine.state.season_open = False
+                self.engine.state.glassblowers_busy = 0
+                self.engine.state.next_sand_tick_at = None
+                closed_fact = Fact(
+                    Event.GLASSWORKS_CLOSED.value,
+                    {
+                        "state": self.engine.snapshot(),
+                        "causa": Cause.MASTER_DISCONNECTED.value,
+                    },
+                )
+                await self.broadcast(closed_fact.event, closed_fact.payload)
 
     async def _sync_later(self, sid: str) -> None:
         await asyncio.sleep(0)
@@ -1047,17 +1080,10 @@ class Glassworks:
 
     # -- gameplay handlers ------------------------------------------------
 
-    @staticmethod
-    def _is_mapping(payload: Any) -> bool:
-        return payload is None or isinstance(payload, dict)
-
-    @staticmethod
-    def _int_field(payload: Any, key: str) -> int | None:
-        if not isinstance(payload, dict):
-            return None
-        value = payload.get(key)
-        # JSON integers only: exclude booleans, which subclass int in Python.
-        return value if type(value) is int else None
+    def _check_session(self, sid: str) -> bool:
+        """Check if session exists with role master or player."""
+        session = self.engine.sessions.get(sid)
+        return session is not None and session.role in (Role.MASTER, Role.PLAYER)
 
     async def _emit_outcome(
         self, sid: str, outcome: Fact | Rejection, cause: str
@@ -1085,11 +1111,55 @@ class Glassworks:
         self, sid: str, payload: Any = None
     ) -> None:
         async with self.lock:
-            if not self._is_mapping(payload):
+            # Global validation order:
+            # 1. Payload shape: if the handler expects a payload, it must be a mapping
+            if not self.engine._payload_is_mapping(payload):
                 await self._reject_malformed(
                     sid, Cause.MASTER.value
                 )
                 return
+            
+            # 2. Role: session must exist with role master or player
+            engine_session = self.engine.sessions.get(sid)
+            if engine_session is None or engine_session.role not in (Role.MASTER, Role.PLAYER):
+                await self.sio.emit(
+                    Event.OPERATION_REJECTED.value,
+                    {
+                        "causa": Cause.CONNECTION.value,
+                        "reason": Rejection.INVALID_ROLE.value,
+                    },
+                    to=sid,
+                )
+                return
+            
+            # 3. Role authorization: season actions - only master can open season
+            if engine_session.role is not Role.MASTER:
+                await self.sio.emit(
+                    Event.OPERATION_REJECTED.value,
+                    {
+                        "causa": Cause.MASTER.value,
+                        "reason": Rejection.ONLY_MASTER_CAN_OPEN_SEASON.value,
+                    },
+                    to=sid,
+                )
+                return
+            
+            # 4. Season state: not applicable for start_requested
+            
+            # Per-request checks for start_requested:
+            # if season_open → season already open
+            if self.engine.state.season_open:
+                await self.sio.emit(
+                    Event.OPERATION_REJECTED.value,
+                    {
+                        "causa": Cause.MASTER.value,
+                        "reason": Rejection.SEASON_ALREADY_OPEN.value,
+                    },
+                    to=sid,
+                )
+                return
+            
+            # All checks passed, call engine handler
             outcome = self.engine.start_season(sid)
             await self._emit_outcome(
                 sid, outcome, Cause.MASTER.value
@@ -1099,11 +1169,53 @@ class Glassworks:
         self, sid: str, payload: Any = None
     ) -> None:
         async with self.lock:
-            if not self._is_mapping(payload):
+            # Global validation order:
+            # 1. Payload shape: if the handler expects a payload, it must be a mapping
+            if not self.engine._payload_is_mapping(payload):
                 await self._reject_malformed(
                     sid, Cause.MASTER.value
                 )
                 return
+            
+            # 2. Role: session must exist with role master or player
+            engine_session = self.engine.sessions.get(sid)
+            if engine_session is None or engine_session.role not in (Role.MASTER, Role.PLAYER):
+                await self.sio.emit(
+                    Event.OPERATION_REJECTED.value,
+                    {
+                        "causa": Cause.CONNECTION.value,
+                        "reason": Rejection.INVALID_ROLE.value,
+                    },
+                    to=sid,
+                )
+                return
+            
+            # 3. Role authorization: season actions - only master can close season
+            if engine_session.role is not Role.MASTER:
+                await self.sio.emit(
+                    Event.OPERATION_REJECTED.value,
+                    {
+                        "causa": Cause.MASTER.value,
+                        "reason": Rejection.ONLY_MASTER_CAN_CLOSE_SEASON.value,
+                    },
+                    to=sid,
+                )
+                return
+            
+            # 4. Season state: for every action except glassworks.start_requested, 
+            # if season_open is false → season not open
+            if not self.engine.state.season_open:
+                await self.sio.emit(
+                    Event.OPERATION_REJECTED.value,
+                    {
+                        "causa": Cause.MASTER.value,
+                        "reason": Rejection.SEASON_NOT_OPEN.value,
+                    },
+                    to=sid,
+                )
+                return
+            
+            # All checks passed, call engine handler
             outcome = self.engine.close_season(sid)
             await self._emit_outcome(
                 sid, outcome, Cause.MASTER.value
@@ -1113,12 +1225,108 @@ class Glassworks:
         self, sid: str, payload: Any = None
     ) -> None:
         async with self.lock:
-            furnace_id = self._int_field(payload, "furnace_id")
+            # Global validation order:
+            # 1. Payload shape: if the handler expects a payload, it must be a mapping
+            if not self.engine._payload_is_mapping(payload):
+                await self._reject_malformed(
+                    sid, Cause.PLAYER.value
+                )
+                return
+            
+            # 2. Role: session must exist with role master or player
+            engine_session = self.engine.sessions.get(sid)
+            if engine_session is None or engine_session.role not in (Role.MASTER, Role.PLAYER):
+                await self.sio.emit(
+                    Event.OPERATION_REJECTED.value,
+                    {
+                        "causa": Cause.CONNECTION.value,
+                        "reason": Rejection.INVALID_ROLE.value,
+                    },
+                    to=sid,
+                )
+                return
+            
+            # 3. Role authorization: player actions - only players can interact
+            if engine_session.role is not Role.PLAYER:
+                await self.sio.emit(
+                    Event.OPERATION_REJECTED.value,
+                    {
+                        "causa": Cause.PLAYER.value,
+                        "reason": Rejection.ONLY_PLAYERS_CAN_INTERACT.value,
+                    },
+                    to=sid,
+                )
+                return
+            
+            # 4. Season state: for every action except glassworks.start_requested, 
+            # if season_open is false → season not open
+            if not self.engine.state.season_open:
+                await self.sio.emit(
+                    Event.OPERATION_REJECTED.value,
+                    {
+                        "causa": Cause.PLAYER.value,
+                        "reason": Rejection.SEASON_NOT_OPEN.value,
+                    },
+                    to=sid,
+                )
+                return
+            
+            # Per-request checks for glassmaking.requested:
+            # 1. Furnace id exists → unknown furnace
+            furnace_id = self.engine._payload_id(payload, "furnace_id")
             if furnace_id is None:
                 await self._reject_malformed(
                     sid, Cause.PLAYER.value
                 )
                 return
+            if furnace_id not in self.engine.state.furnaces:
+                await self.sio.emit(
+                    Event.OPERATION_REJECTED.value,
+                    {
+                        "causa": Cause.PLAYER.value,
+                        "reason": Rejection.UNKNOWN_FURNACE.value,
+                    },
+                    to=sid,
+                )
+                return
+            
+            # 2. Furnace has no piece → furnace busy
+            if self.engine.state.furnaces[furnace_id].piece_id is not None:
+                await self.sio.emit(
+                    Event.OPERATION_REJECTED.value,
+                    {
+                        "causa": Cause.PLAYER.value,
+                        "reason": Rejection.FURNACE_BUSY.value,
+                    },
+                    to=sid,
+                )
+                return
+            
+            # 3. Sand >= 3 → not enough sand
+            if self.engine.state.sand < SAND_PER_PIECE:
+                await self.sio.emit(
+                    Event.OPERATION_REJECTED.value,
+                    {
+                        "causa": Cause.PLAYER.value,
+                        "reason": Rejection.NOT_ENOUGH_SAND.value,
+                    },
+                    to=sid,
+                )
+                return
+            
+            # 4. Free worker exists → no free worker
+            if self.engine.state.glassblowers_busy >= self.engine.state.glassblowers_total:
+                await self.sio.emit(
+                    Event.OPERATION_REJECTED.value,
+                    {
+                        "causa": Cause.PLAYER.value,
+                        "reason": Rejection.NO_FREE_WORKER.value,
+                    },
+                    to=sid,
+                )
+                return
+            
+            # All checks passed, call engine handler
             outcome = self.engine.request_piece(sid, furnace_id)
             await self._emit_outcome(
                 sid, outcome, Cause.PLAYER.value
@@ -1128,12 +1336,107 @@ class Glassworks:
         self, sid: str, payload: Any = None
     ) -> None:
         async with self.lock:
-            furnace_id = self._int_field(payload, "furnace_id")
+            # Global validation order:
+            # 1. Payload shape: if the handler expects a payload, it must be a mapping
+            if not self.engine._payload_is_mapping(payload):
+                await self._reject_malformed(
+                    sid, Cause.PLAYER.value
+                )
+                return
+            
+            # 2. Role: session must exist with role master or player
+            engine_session = self.engine.sessions.get(sid)
+            if engine_session is None or engine_session.role not in (Role.MASTER, Role.PLAYER):
+                await self.sio.emit(
+                    Event.OPERATION_REJECTED.value,
+                    {
+                        "causa": Cause.CONNECTION.value,
+                        "reason": Rejection.INVALID_ROLE.value,
+                    },
+                    to=sid,
+                )
+                return
+            
+            # 3. Role authorization: player actions - only players can interact
+            if engine_session.role is not Role.PLAYER:
+                await self.sio.emit(
+                    Event.OPERATION_REJECTED.value,
+                    {
+                        "causa": Cause.PLAYER.value,
+                        "reason": Rejection.ONLY_PLAYERS_CAN_INTERACT.value,
+                    },
+                    to=sid,
+                )
+                return
+            
+            # 4. Season state: for every action except glassworks.start_requested, 
+            # if season_open is false → season not open
+            if not self.engine.state.season_open:
+                await self.sio.emit(
+                    Event.OPERATION_REJECTED.value,
+                    {
+                        "causa": Cause.PLAYER.value,
+                        "reason": Rejection.SEASON_NOT_OPEN.value,
+                    },
+                    to=sid,
+                )
+                return
+            
+            # Per-request checks for glassmaking.bench_requested:
+            # 1. Furnace id exists → unknown furnace
+            furnace_id = self.engine._payload_id(payload, "furnace_id")
             if furnace_id is None:
                 await self._reject_malformed(
                     sid, Cause.PLAYER.value
                 )
                 return
+            if furnace_id not in self.engine.state.furnaces:
+                await self.sio.emit(
+                    Event.OPERATION_REJECTED.value,
+                    {
+                        "causa": Cause.PLAYER.value,
+                        "reason": Rejection.UNKNOWN_FURNACE.value,
+                    },
+                    to=sid,
+                )
+                return
+            
+            # 2. Piece is furnace_ready → piece not ready
+            furnace = self.engine.state.furnaces.get(furnace_id)
+            piece = None
+            if furnace is not None and furnace.piece_id is not None:
+                piece = self.engine.state.pieces.get(furnace.piece_id)
+            
+            if piece is None or piece.state is not PieceState.FURNACE_READY:
+                await self.sio.emit(
+                    Event.OPERATION_REJECTED.value,
+                    {
+                        "causa": Cause.PLAYER.value,
+                        "reason": Rejection.PIECE_NOT_READY.value,
+                    },
+                    to=sid,
+                )
+                return
+            
+            # 3. A bench is free → bench busy
+            free_bench_exists = False
+            for bench in sorted(self.engine.state.benches.values(), key=lambda b: b.id):
+                if bench.piece_id is None:
+                    free_bench_exists = True
+                    break
+            
+            if not free_bench_exists:
+                await self.sio.emit(
+                    Event.OPERATION_REJECTED.value,
+                    {
+                        "causa": Cause.PLAYER.value,
+                        "reason": Rejection.BENCH_BUSY.value,
+                    },
+                    to=sid,
+                )
+                return
+            
+            # All checks passed, call engine handler
             outcome = self.engine.move_to_bench(sid, furnace_id)
             await self._emit_outcome(
                 sid, outcome, Cause.PLAYER.value
@@ -1143,12 +1446,116 @@ class Glassworks:
         self, sid: str, payload: Any = None
     ) -> None:
         async with self.lock:
-            bench_id = self._int_field(payload, "bench_id")
+            # Global validation order:
+            # 1. Payload shape: if the handler expects a payload, it must be a mapping
+            if not self.engine._payload_is_mapping(payload):
+                await self._reject_malformed(
+                    sid, Cause.PLAYER.value
+                )
+                return
+            
+            # 2. Role: session must exist with role master or player
+            engine_session = self.engine.sessions.get(sid)
+            if engine_session is None or engine_session.role not in (Role.MASTER, Role.PLAYER):
+                await self.sio.emit(
+                    Event.OPERATION_REJECTED.value,
+                    {
+                        "causa": Cause.CONNECTION.value,
+                        "reason": Rejection.INVALID_ROLE.value,
+                    },
+                    to=sid,
+                )
+                return
+            
+            # 3. Role authorization: player actions - only players can interact
+            if engine_session.role is not Role.PLAYER:
+                await self.sio.emit(
+                    Event.OPERATION_REJECTED.value,
+                    {
+                        "causa": Cause.PLAYER.value,
+                        "reason": Rejection.ONLY_PLAYERS_CAN_INTERACT.value,
+                    },
+                    to=sid,
+                )
+                return
+            
+            # 4. Season state: for every action except glassworks.start_requested, 
+            # if season_open is false → season not open
+            if not self.engine.state.season_open:
+                await self.sio.emit(
+                    Event.OPERATION_REJECTED.value,
+                    {
+                        "causa": Cause.PLAYER.value,
+                        "reason": Rejection.SEASON_NOT_OPEN.value,
+                    },
+                    to=sid,
+                )
+                return
+            
+            # Per-request checks for glass.take_requested:
+            # 1. Bench id exists → unknown bench
+            bench_id = self.engine._payload_id(payload, "bench_id")
             if bench_id is None:
                 await self._reject_malformed(
                     sid, Cause.PLAYER.value
                 )
                 return
+            if bench_id not in self.engine.state.benches:
+                await self.sio.emit(
+                    Event.OPERATION_REJECTED.value,
+                    {
+                        "causa": Cause.PLAYER.value,
+                        "reason": Rejection.UNKNOWN_BENCH.value,
+                    },
+                    to=sid,
+                )
+                return
+            
+            # 2. Bench holds a piece in bench_cooling → if not, but bench holds a piece in bench_working → piece not ready; if bench is empty → no piece to take
+            bench = self.engine.state.benches.get(bench_id)
+            piece = None
+            if bench is not None and bench.piece_id is not None:
+                piece = self.engine.state.pieces.get(bench.piece_id)
+            
+            if piece is None:
+                # bench is empty → no piece to take
+                await self.sio.emit(
+                    Event.OPERATION_REJECTED.value,
+                    {
+                        "causa": Cause.PLAYER.value,
+                        "reason": Rejection.NO_PIECE_TO_TAKE.value,
+                    },
+                    to=sid,
+                )
+                return
+            
+            if piece.state is PieceState.BENCH_COOLING:
+                # bench holds a piece in bench_cooling → proceed
+                pass
+            elif piece.state is PieceState.BENCH_WORKING:
+                # bench has piece but state is bench_working (not yet cooling) → piece not ready
+                await self.sio.emit(
+                    Event.OPERATION_REJECTED.value,
+                    {
+                        "causa": Cause.PLAYER.value,
+                        "reason": Rejection.PIECE_NOT_READY.value,
+                    },
+                    to=sid,
+                )
+                return
+            else:
+                # bench has piece but state is something else → no piece to take
+                await self.sio.emit(
+                    Event.OPERATION_REJECTED.value,
+                    {
+                        "causa": Cause.PLAYER.value,
+                        "reason": Rejection.NO_PIECE_TO_TAKE.value,
+                    },
+                    to=sid,
+                )
+                return
+            
+            # All checks passed, call engine handler
             outcome = self.engine.take_piece(sid, bench_id)
             await self._emit_outcome(
                 sid, outcome, Cause.PLAYER.value
@@ -1158,6 +1565,79 @@ class Glassworks:
         self, sid: str, payload: Any = None
     ) -> None:
         async with self.lock:
+            # Global validation order:
+            # 1. Payload shape: if the handler expects a payload, it must be a mapping
+            if not self.engine._payload_is_mapping(payload):
+                await self._reject_malformed(
+                    sid, Cause.PLAYER.value
+                )
+                return
+            
+            # 2. Role: session must exist with role master or player
+            engine_session = self.engine.sessions.get(sid)
+            if engine_session is None or engine_session.role not in (Role.MASTER, Role.PLAYER):
+                await self.sio.emit(
+                    Event.OPERATION_REJECTED.value,
+                    {
+                        "causa": Cause.CONNECTION.value,
+                        "reason": Rejection.INVALID_ROLE.value,
+                    },
+                    to=sid,
+                )
+                return
+            
+            # 3. Role authorization: player actions - only players can interact
+            if engine_session.role is not Role.PLAYER:
+                await self.sio.emit(
+                    Event.OPERATION_REJECTED.value,
+                    {
+                        "causa": Cause.PLAYER.value,
+                        "reason": Rejection.ONLY_PLAYERS_CAN_INTERACT.value,
+                    },
+                    to=sid,
+                )
+                return
+            
+            # 4. Season state: for every action except glassworks.start_requested, 
+            # if season_open is false → season not open
+            if not self.engine.state.season_open:
+                await self.sio.emit(
+                    Event.OPERATION_REJECTED.value,
+                    {
+                        "causa": Cause.PLAYER.value,
+                        "reason": Rejection.SEASON_NOT_OPEN.value,
+                    },
+                    to=sid,
+                )
+                return
+            
+            # Per-request checks for furnace.purchase_requested:
+            # 1. count < 4 → max furnaces reached
+            if len(self.engine.state.furnaces) >= MAX_FURNACES:
+                await self.sio.emit(
+                    Event.OPERATION_REJECTED.value,
+                    {
+                        "causa": Cause.PLAYER.value,
+                        "reason": Rejection.MAX_FURNACES_REACHED.value,
+                    },
+                    to=sid,
+                )
+                return
+            
+            # 2. glass >= cost → not enough glass
+            cost = purchase_cost(len(self.engine.state.furnaces), self.engine.state.season)
+            if self.engine.state.glass < cost:
+                await self.sio.emit(
+                    Event.OPERATION_REJECTED.value,
+                    {
+                        "causa": Cause.PLAYER.value,
+                        "reason": Rejection.NOT_ENOUGH_GLASS.value,
+                    },
+                    to=sid,
+                )
+                return
+            
+            # All checks passed, call engine handler
             outcome = self.engine.purchase_furnace(sid)
             await self._emit_outcome(
                 sid, outcome, Cause.PLAYER.value
@@ -1167,6 +1647,79 @@ class Glassworks:
         self, sid: str, payload: Any = None
     ) -> None:
         async with self.lock:
+            # Global validation order:
+            # 1. Payload shape: if the handler expects a payload, it must be a mapping
+            if not self.engine._payload_is_mapping(payload):
+                await self._reject_malformed(
+                    sid, Cause.PLAYER.value
+                )
+                return
+            
+            # 2. Role: session must exist with role master or player
+            engine_session = self.engine.sessions.get(sid)
+            if engine_session is None or engine_session.role not in (Role.MASTER, Role.PLAYER):
+                await self.sio.emit(
+                    Event.OPERATION_REJECTED.value,
+                    {
+                        "causa": Cause.CONNECTION.value,
+                        "reason": Rejection.INVALID_ROLE.value,
+                    },
+                    to=sid,
+                )
+                return
+            
+            # 3. Role authorization: player actions - only players can interact
+            if engine_session.role is not Role.PLAYER:
+                await self.sio.emit(
+                    Event.OPERATION_REJECTED.value,
+                    {
+                        "causa": Cause.PLAYER.value,
+                        "reason": Rejection.ONLY_PLAYERS_CAN_INTERACT.value,
+                    },
+                    to=sid,
+                )
+                return
+            
+            # 4. Season state: for every action except glassworks.start_requested, 
+            # if season_open is false → season not open
+            if not self.engine.state.season_open:
+                await self.sio.emit(
+                    Event.OPERATION_REJECTED.value,
+                    {
+                        "causa": Cause.PLAYER.value,
+                        "reason": Rejection.SEASON_NOT_OPEN.value,
+                    },
+                    to=sid,
+                )
+                return
+            
+            # Per-request checks for bench.purchase_requested:
+            # 1. count < 4 → max benches reached
+            if len(self.engine.state.benches) >= MAX_BENCHES:
+                await self.sio.emit(
+                    Event.OPERATION_REJECTED.value,
+                    {
+                        "causa": Cause.PLAYER.value,
+                        "reason": Rejection.MAX_BENCHES_REACHED.value,
+                    },
+                    to=sid,
+                )
+                return
+            
+            # 2. glass >= cost → not enough glass
+            cost = purchase_cost(len(self.engine.state.benches), self.engine.state.season)
+            if self.engine.state.glass < cost:
+                await self.sio.emit(
+                    Event.OPERATION_REJECTED.value,
+                    {
+                        "causa": Cause.PLAYER.value,
+                        "reason": Rejection.NOT_ENOUGH_GLASS.value,
+                    },
+                    to=sid,
+                )
+                return
+            
+            # All checks passed, call engine handler
             outcome = self.engine.purchase_bench(sid)
             await self._emit_outcome(
                 sid, outcome, Cause.PLAYER.value

@@ -89,7 +89,9 @@
         "glassworks.closed",
         applyFact(
           (payload) =>
-            "Season closed with " + payload.state.glass + " glass stored."
+            payload.causa === "master_disconnected"
+              ? "Season closed: the Master disconnected."
+              : "Season closed with " + payload.state.glass + " glass stored."
         )
       );
       socket.listen(
